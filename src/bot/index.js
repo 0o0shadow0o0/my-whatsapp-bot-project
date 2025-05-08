@@ -1,7 +1,8 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers } = require("@whiskeysockets/baileys");
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, isJidUser } = require("@whiskeysockets/baileys");
 const path = require("path");
 const fs = require("fs");
 const qrcode = require("qrcode-terminal");
+const readline = require("readline"); 
 const config = require("../../config/settings");
 const { Boom } = require("@hapi/boom");
 const { startWebServer } = require("../web/server");
@@ -16,7 +17,13 @@ let webInterface = null;
 const commands = new Map();
 const commandCooldowns = new Map();
 
-// Load Commands
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+
 function loadCommands() {
     const commandsPath = path.join(__dirname, "commands");
     if (!fs.existsSync(commandsPath)) {
@@ -24,7 +31,6 @@ function loadCommands() {
         return;
     }
     const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
-
     for (const file of commandFiles) {
         try {
             const command = require(path.join(commandsPath, file));
@@ -48,12 +54,48 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         version,
         auth: state,
-        printQRInTerminal: true,
+        printQRInTerminal: false, 
         browser: Browsers.macOS("Desktop"),
-        logger: require("pino")({ level: "silent" })
+        logger: require("pino")({ level: "silent" }),
+        shouldIgnoreJid: jid => !isJidUser(jid)
     });
 
-    loadCommands(); // Load commands after socket is created or before connection
+    if (!sock.authState.creds.registered) {
+        const connectMethod = await question("Choose connection method: (1) QR Code (2) Pairing Code\nType 1 or 2 and press Enter: ");
+
+        if (connectMethod.trim() === "2") {
+            let phoneNumber = await question("Please enter your WhatsApp number with country code (e.g., +1234567890): ");
+            phoneNumber = phoneNumber.replace(/[^0-9+]/g, "").trim();
+            if (!phoneNumber.startsWith("+")) {
+                 console.log("Warning: Phone number must start with a country code (e.g., +1, +91). Attempting to proceed, but this might fail.");
+            }
+            if (phoneNumber) {
+                try {
+                    console.log(`Requesting pairing code for ${phoneNumber}...`);
+                    const code = await sock.requestPairingCode(phoneNumber.replace("+","")); 
+                    console.log(`Your pairing code is: ${code}`);
+                    console.log("Please enter this code on your WhatsApp (Link a device > Link with phone number instead).");
+                    if (webInterface && webInterface.broadcast) {
+                        webInterface.broadcast({ type: "pairingCode", data: code, forNumber: phoneNumber });
+                    }
+                } catch (e) {
+                    console.error("Failed to request pairing code:", e.message);
+                    console.log("Falling back to QR code method. Please restart if you want to try pairing code again.");
+                    sock.printQRInTerminal = true; 
+                }
+            } else {
+                console.log("No phone number entered. Falling back to QR code method.");
+                sock.printQRInTerminal = true;
+            }
+        } else {
+            console.log("Using QR Code method.");
+            sock.printQRInTerminal = true; 
+        }
+    } else {
+         console.log("Found existing session, attempting to connect...");
+    }
+
+    loadCommands();
     initScheduler(sock);
 
     if (!webInterface) {
@@ -62,7 +104,7 @@ async function connectToWhatsApp() {
 
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr) {
+        if (qr && sock.printQRInTerminal) { 
             console.log("QR code received, scan it with your WhatsApp:");
             qrcode.generate(qr, { small: true });
             if (webInterface && webInterface.broadcast) {
@@ -77,6 +119,9 @@ async function connectToWhatsApp() {
             }
             if (shouldReconnect) {
                 connectToWhatsApp();
+            } else {
+                console.log("Not reconnecting, logged out or other reason.");
+                if (rl && !rl.closed) rl.close();
             }
         } else if (connection === "open") {
             console.log("WhatsApp connection opened!");
@@ -84,6 +129,7 @@ async function connectToWhatsApp() {
             if (webInterface && webInterface.broadcast) {
                 webInterface.broadcast({ type: "status", message: "WhatsApp connection opened!" });
             }
+            if (rl && !rl.closed) rl.close(); 
         }
     });
 
@@ -92,12 +138,11 @@ async function connectToWhatsApp() {
     sock.ev.on("messages.upsert", async (m) => {
         if (!m.messages) return;
         const msg = m.messages[0];
-        if (!msg.message || msg.key.fromMe) return; // Ignore own messages and non-message updates
+        if (!msg.message || msg.key.fromMe || !isJidUser(msg.key.remoteJid)) return;
 
         if (webInterface && webInterface.broadcast) {
             webInterface.broadcast({ type: "newWhatsappMessage", data: msg });
         }
-
         const sender = msg.key.remoteJid;
         let text = "";
         if (msg.message.conversation) {
@@ -105,31 +150,21 @@ async function connectToWhatsApp() {
         } else if (msg.message.extendedTextMessage) {
             text = msg.message.extendedTextMessage.text;
         }
-
         console.log(`New message from ${sender}: ${text}`);
-
-        // Command Handling
         if (text.startsWith(config.prefix)) {
             const args = text.slice(config.prefix.length).trim().split(/ +/);
             const commandName = args.shift().toLowerCase();
             const command = commands.get(commandName);
-
             if (command) {
-                // Cooldowns
                 if (command.cooldown) {
                     const now = Date.now();
                     const timestamps = commandCooldowns.get(command.name) || new Map();
                     const cooldownAmount = (command.cooldown || 3) * 1000;
-
                     if (timestamps.has(sender)) {
                         const expirationTime = timestamps.get(sender) + cooldownAmount;
                         if (now < expirationTime) {
                             const timeLeft = (expirationTime - now) / 1000;
-                            await sock.sendMessage(sender, { text: `يرجى الانتظار ${timeLeft.toFixed(1)} ثانية أخرى قبل استخدام الأمر 
-                                
-                                ${command.name}
-                                
-                                مرة أخرى.` });
+                            await sock.sendMessage(sender, { text: `يرجى الانتظار ${timeLeft.toFixed(1)} ثانية أخرى قبل استخدام الأمر \n${command.name}\nمرة أخرى.` });
                             return;
                         }
                     }
@@ -137,23 +172,33 @@ async function connectToWhatsApp() {
                     commandCooldowns.set(command.name, timestamps);
                     setTimeout(() => timestamps.delete(sender), cooldownAmount);
                 }
-
                 try {
-                    await command.execute(sock, msg, args, webInterface); // Pass webInterface if commands need to broadcast
+                    await command.execute(sock, msg, args, webInterface);
                 } catch (error) {
                     console.error(`Error executing command ${command.name}:`, error);
                     await sock.sendMessage(sender, { text: "حدث خطأ أثناء تنفيذ هذا الأمر." });
                 }
-            } else {
-                // Optional: send a message if command is not found
-                // await sock.sendMessage(sender, { text: `الأمر '${commandName}' غير موجود. استخدم ${config.prefix}help لرؤية الأوامر المتاحة.` });
             }
         }
     });
-
     return sock;
 }
 
-connectToWhatsApp().catch(err => console.error("Failed to connect to WhatsApp:", err));
+connectToWhatsApp().catch(err => {
+    console.error("Failed to connect to WhatsApp:", err);
+    if (rl && !rl.closed) rl.close();
+});
+
+// Graceful shutdown
+const gracefulShutdown = () => {
+    console.log("Shutting down gracefully...");
+    if (rl && !rl.closed) {
+        rl.close();
+    }
+    // Add any other cleanup tasks here
+    process.exit(0);
+};
+process.on("SIGINT", gracefulShutdown);
+process.on("SIGTERM", gracefulShutdown);
 
 module.exports = { connectToWhatsApp };

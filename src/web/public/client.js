@@ -10,11 +10,14 @@ const scheduleDateTimeInput = document.getElementById("scheduleDateTime");
 const scheduleMessageBtn = document.getElementById("scheduleMessageBtn");
 const scheduledMessagesUl = document.getElementById("scheduledMessagesList");
 
+const connectionMethodInfo = document.getElementById("connectionMethodInfo");
 const qrCodeContainer = document.getElementById("qrCodeContainer");
-// const qrCodePre = document.getElementById("qrCodePre"); // No longer needed
-const qrCodeImageContainer = document.getElementById("qrCodeImageContainer"); // New container for the image
+const qrCodeImageContainer = document.getElementById("qrCodeImageContainer");
+const pairingCodeContainer = document.getElementById("pairingCodeContainer");
+const pairingCodeValue = document.getElementById("pairingCodeValue");
+const pairingForNumber = document.getElementById("pairingForNumber");
 
-let qrCodeInstance = null; // To hold the QRCode instance
+let qrCodeInstance = null; 
 
 const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const socketURL = `${socketProtocol}//${window.location.host}`;
@@ -50,7 +53,7 @@ function addWhatsAppMessageToList(msgData) {
 }
 
 function displayScheduledMessages(messages) {
-    scheduledMessagesUl.innerHTML = ""; // Clear current list
+    scheduledMessagesUl.innerHTML = ""; 
     if (messages && messages.length > 0) {
         messages.forEach(msg => {
             const li = document.createElement("li");
@@ -79,6 +82,9 @@ socket.onopen = () => {
     connectionStatusDiv.style.color = "green";
     addMessageToList("تم الاتصال بخادم الويب بنجاح.");
     socket.send(JSON.stringify({ type: "getScheduledMessages" }));
+    connectionMethodInfo.style.display = "block"; // Show initial info
+    qrCodeContainer.style.display = "none";
+    pairingCodeContainer.style.display = "none";
 };
 
 socket.onmessage = (event) => {
@@ -88,7 +94,9 @@ socket.onmessage = (event) => {
         if (data.type === "status") {
             addMessageToList(`[حالة] ${data.message}`);
             if (data.message === "WhatsApp connection opened!") {
-                 qrCodeContainer.style.display = "none"; // Hide QR if connection is open
+                 qrCodeContainer.style.display = "none"; 
+                 pairingCodeContainer.style.display = "none";
+                 connectionMethodInfo.style.display = "none";
             }
         } else if (data.type === "error") {
             addMessageToList(`[خطأ] ${data.message}`, "error");
@@ -97,7 +105,7 @@ socket.onmessage = (event) => {
         } else if (data.type === "scheduledMessagesList") {
             displayScheduledMessages(data.data);
         } else if (data.type === "qrCode") {
-            qrCodeImageContainer.innerHTML = ""; // Clear previous QR code
+            qrCodeImageContainer.innerHTML = ""; 
             if (typeof QRCode !== 'undefined') {
                 qrCodeInstance = new QRCode(qrCodeImageContainer, {
                     text: data.data,
@@ -108,10 +116,19 @@ socket.onmessage = (event) => {
                     correctLevel : QRCode.CorrectLevel.H
                 });
             } else {
-                qrCodeImageContainer.textContent = "QRCode library not loaded."; // Fallback
+                qrCodeImageContainer.textContent = "QRCode library not loaded."; 
             }
             qrCodeContainer.style.display = "block";
+            pairingCodeContainer.style.display = "none";
+            connectionMethodInfo.style.display = "none";
             addMessageToList("يرجى مسح رمز QR المعروض أعلاه للاتصال بواتساب.");
+        } else if (data.type === "pairingCode") {
+            pairingCodeValue.textContent = data.data;
+            pairingForNumber.textContent = data.forNumber ? `للرقم: ${data.forNumber}` : "";
+            pairingCodeContainer.style.display = "block";
+            qrCodeContainer.style.display = "none";
+            connectionMethodInfo.style.display = "none";
+            addMessageToList(`رمز الاقتران الخاص بك هو: ${data.data}. يرجى إدخاله في واتساب.`);
         } else if (data.success === false && data.message) {
              addMessageToList(`[خطأ جدولة] ${data.message}`, "error");
         } else {
@@ -128,6 +145,8 @@ socket.onclose = () => {
     connectionStatusDiv.style.color = "red";
     addMessageToList("انقطع الاتصال بخادم الويب.", "error");
     qrCodeContainer.style.display = "none";
+    pairingCodeContainer.style.display = "none";
+    connectionMethodInfo.style.display = "block"; // Show info on disconnect
 };
 
 socket.onerror = (error) => {
@@ -136,6 +155,8 @@ socket.onerror = (error) => {
     addMessageToList("حدث خطأ في اتصال WebSocket: " + (error.message || "غير معروف"), "error");
     console.error("WebSocket Error:", error);
     qrCodeContainer.style.display = "none";
+    pairingCodeContainer.style.display = "none";
+    connectionMethodInfo.style.display = "block"; // Show info on error
 };
 
 sendMessageBtn.onclick = () => {

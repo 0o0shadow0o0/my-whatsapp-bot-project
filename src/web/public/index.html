@@ -24,8 +24,10 @@
         .sent-message { text-align: left; background-color: #dcf8c6; }
         .scheduled-item { display: flex; justify-content: space-between; align-items: center; }
         .scheduled-item span { flex-grow: 1; }
-        .qr-code-display { text-align: center; margin: 15px 0; }
+        .connection-method-info { text-align: center; margin: 15px 0; padding: 10px; border: 1px solid #ddd; background-color: #f9f9f9; border-radius: 5px;}
+        .qr-code-display, .pairing-code-display { text-align: center; margin: 15px 0; }
         #qrCodeImageContainer { border: 1px solid #ccc; padding:10px; background-color:#fff; display: inline-block; }
+        #pairingCodeValue { font-size: 2em; font-weight: bold; color: #d9534f; letter-spacing: 2px; padding: 10px; border: 1px dashed #ccc; display: inline-block; margin-top: 5px; }
     </style>
 </head>
 <body>
@@ -33,9 +35,24 @@
         <h1>لوحة تحكم بوت واتساب</h1>
 
         <div id="connectionStatus">الحالة: جاري الاتصال...</div>
+        
+        <div class="connection-method-info" id="connectionMethodInfo" style="display: none;">
+            <p>للاتصال، يرجى تشغيل البوت من الطرفية واختيار طريقة الربط (رمز QR أو رمز الاقتران).</p>
+        </div>
+
         <div id="qrCodeContainer" class="qr-code-display" style="display: none;">
             <h2>امسح رمز QR للاتصال</h2>
+            <p>إذا اخترت طريقة رمز QR في الطرفية، سيظهر الرمز هنا.</p>
             <div id="qrCodeImageContainer"></div>
+        </div>
+
+        <div id="pairingCodeContainer" class="pairing-code-display" style="display: none;">
+            <h2>استخدم رمز الاقتران للاتصال</h2>
+            <p>إذا اخترت طريقة رمز الاقتران في الطرفية وأدخلت رقم هاتفك، سيظهر رمز الاقتران هنا.</p>
+            <p>أدخل هذا الرمز في واتساب على هاتفك: <strong>الإعدادات > الأجهزة المرتبطة > ربط جهاز > الربط باستخدام رقم الهاتف بدلاً من ذلك</strong>.</p>
+            <p>رمز الاقتران الخاص بك هو:</p>
+            <div id="pairingCodeValue"></div>
+            <p id="pairingForNumber" style="font-size: 0.9em; color: #555;"></p>
         </div>
 
         <h2>إرسال رسالة واتساب فورية</h2>
