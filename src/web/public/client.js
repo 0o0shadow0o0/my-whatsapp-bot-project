@@ -11,7 +11,10 @@ const scheduleMessageBtn = document.getElementById("scheduleMessageBtn");
 const scheduledMessagesUl = document.getElementById("scheduledMessagesList");
 
 const qrCodeContainer = document.getElementById("qrCodeContainer");
-const qrCodePre = document.getElementById("qrCodePre");
+// const qrCodePre = document.getElementById("qrCodePre"); // No longer needed
+const qrCodeImageContainer = document.getElementById("qrCodeImageContainer"); // New container for the image
+
+let qrCodeInstance = null; // To hold the QRCode instance
 
 const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const socketURL = `${socketProtocol}//${window.location.host}`;
@@ -53,7 +56,7 @@ function displayScheduledMessages(messages) {
             const li = document.createElement("li");
             li.className = "scheduled-item";
             const sendAt = new Date(msg.sendAt).toLocaleString("ar-EG");
-            li.innerHTML = `<span>إلى: ${msg.to} | النص: "${msg.text}" | وقت الإرسال: ${sendAt}</span>`;
+            li.innerHTML = `<span>إلى: ${msg.to} | النص: \"${msg.text}\" | وقت الإرسال: ${sendAt}</span>`;
             
             const cancelButton = document.createElement("button");
             cancelButton.textContent = "إلغاء";
@@ -75,7 +78,6 @@ socket.onopen = () => {
     connectionStatusDiv.textContent = "الحالة: متصل بالخادم";
     connectionStatusDiv.style.color = "green";
     addMessageToList("تم الاتصال بخادم الويب بنجاح.");
-    // Request initial list of scheduled messages
     socket.send(JSON.stringify({ type: "getScheduledMessages" }));
 };
 
@@ -85,6 +87,9 @@ socket.onmessage = (event) => {
         console.log("Message from server:", data);
         if (data.type === "status") {
             addMessageToList(`[حالة] ${data.message}`);
+            if (data.message === "WhatsApp connection opened!") {
+                 qrCodeContainer.style.display = "none"; // Hide QR if connection is open
+            }
         } else if (data.type === "error") {
             addMessageToList(`[خطأ] ${data.message}`, "error");
         } else if (data.type === "newWhatsappMessage") {
@@ -92,10 +97,22 @@ socket.onmessage = (event) => {
         } else if (data.type === "scheduledMessagesList") {
             displayScheduledMessages(data.data);
         } else if (data.type === "qrCode") {
-            qrCodePre.textContent = data.data; // Display QR in text for now, can be improved
+            qrCodeImageContainer.innerHTML = ""; // Clear previous QR code
+            if (typeof QRCode !== 'undefined') {
+                qrCodeInstance = new QRCode(qrCodeImageContainer, {
+                    text: data.data,
+                    width: 256,
+                    height: 256,
+                    colorDark : "#000000",
+                    colorLight : "#ffffff",
+                    correctLevel : QRCode.CorrectLevel.H
+                });
+            } else {
+                qrCodeImageContainer.textContent = "QRCode library not loaded."; // Fallback
+            }
             qrCodeContainer.style.display = "block";
             addMessageToList("يرجى مسح رمز QR المعروض أعلاه للاتصال بواتساب.");
-        } else if (data.success === false && data.message) { // Handle specific error responses for scheduling
+        } else if (data.success === false && data.message) {
              addMessageToList(`[خطأ جدولة] ${data.message}`, "error");
         } else {
             addMessageToList(event.data);
@@ -144,5 +161,6 @@ scheduleMessageBtn.onclick = () => {
     }
     socket.send(JSON.stringify({ type: "scheduleMessage", to: recipient, text: text, sendAt: sendAt }));
     addMessageToList(`جاري جدولة رسالة إلى ${recipient} في ${new Date(sendAt).toLocaleString("ar-EG")}...`);
-    scheduleMessageTextInput.value = ""; // Clear only text field after scheduling attempt
+    scheduleMessageTextInput.value = "";
 };
+

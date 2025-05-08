@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>لوحة تحكم بوت واتساب</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
         #container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
@@ -23,8 +24,8 @@
         .sent-message { text-align: left; background-color: #dcf8c6; }
         .scheduled-item { display: flex; justify-content: space-between; align-items: center; }
         .scheduled-item span { flex-grow: 1; }
-        .qr-code { text-align: center; margin: 15px 0; }
-        .qr-code pre { white-space: pre-wrap; font-family: monospace; line-height: 1; font-size: 10px; display: inline-block; border: 1px solid #ccc; padding:10px; background-color:#fff;}
+        .qr-code-display { text-align: center; margin: 15px 0; }
+        #qrCodeImageContainer { border: 1px solid #ccc; padding:10px; background-color:#fff; display: inline-block; }
     </style>
 </head>
 <body>
@@ -32,9 +33,9 @@
         <h1>لوحة تحكم بوت واتساب</h1>
 
         <div id="connectionStatus">الحالة: جاري الاتصال...</div>
-        <div id="qrCodeContainer" class="qr-code" style="display: none;">
+        <div id="qrCodeContainer" class="qr-code-display" style="display: none;">
             <h2>امسح رمز QR للاتصال</h2>
-            <pre id="qrCodePre"></pre>
+            <div id="qrCodeImageContainer"></div>
         </div>
 
         <h2>إرسال رسالة واتساب فورية</h2>
