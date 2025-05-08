@@ -1,8 +1,8 @@
+// src/bot/index.js
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, Browsers, isJidUser } = require("@whiskeysockets/baileys");
 const path = require("path");
 const fs = require("fs");
-const qrcode = require("qrcode-terminal");
-const readline = require("readline"); 
+// const qrcode = require("qrcode-terminal"); // Not printing to terminal anymore
 const config = require("../../config/settings");
 const { Boom } = require("@hapi/boom");
 const { startWebServer } = require("../web/server");
@@ -13,16 +13,13 @@ if (!fs.existsSync(SESSION_DIR)) {
     fs.mkdirSync(SESSION_DIR, { recursive: true });
 }
 
-let webInterface = null;
 const commands = new Map();
 const commandCooldowns = new Map();
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
-
-const question = (text) => new Promise((resolve) => rl.question(text, resolve));
+const botState = {
+    sock: null,
+    webInterface: null,
+};
 
 function loadCommands() {
     const commandsPath = path.join(__dirname, "commands");
@@ -59,77 +56,56 @@ async function connectToWhatsApp() {
         logger: require("pino")({ level: "silent" }),
         shouldIgnoreJid: jid => !isJidUser(jid)
     });
-
-    if (!sock.authState.creds.registered) {
-        const connectMethod = await question("Choose connection method: (1) QR Code (2) Pairing Code\nType 1 or 2 and press Enter: ");
-
-        if (connectMethod.trim() === "2") {
-            let phoneNumber = await question("Please enter your WhatsApp number with country code (e.g., +1234567890): ");
-            phoneNumber = phoneNumber.replace(/[^0-9+]/g, "").trim();
-            if (!phoneNumber.startsWith("+")) {
-                 console.log("Warning: Phone number must start with a country code (e.g., +1, +91). Attempting to proceed, but this might fail.");
-            }
-            if (phoneNumber) {
-                try {
-                    console.log(`Requesting pairing code for ${phoneNumber}...`);
-                    const code = await sock.requestPairingCode(phoneNumber.replace("+","")); 
-                    console.log(`Your pairing code is: ${code}`);
-                    console.log("Please enter this code on your WhatsApp (Link a device > Link with phone number instead).");
-                    if (webInterface && webInterface.broadcast) {
-                        webInterface.broadcast({ type: "pairingCode", data: code, forNumber: phoneNumber });
-                    }
-                } catch (e) {
-                    console.error("Failed to request pairing code:", e.message);
-                    console.log("Falling back to QR code method. Please restart if you want to try pairing code again.");
-                    sock.printQRInTerminal = true; 
-                }
-            } else {
-                console.log("No phone number entered. Falling back to QR code method.");
-                sock.printQRInTerminal = true;
-            }
-        } else {
-            console.log("Using QR Code method.");
-            sock.printQRInTerminal = true; 
-        }
-    } else {
-         console.log("Found existing session, attempting to connect...");
-    }
+    botState.sock = sock;
 
     loadCommands();
     initScheduler(sock);
 
-    if (!webInterface) {
-        webInterface = startWebServer(sock, scheduleMessage, getScheduledMessages, cancelScheduledMessage);
-    }
-
     sock.ev.on("connection.update", async (update) => {
         const { connection, lastDisconnect, qr } = update;
-        if (qr && sock.printQRInTerminal) { 
-            console.log("QR code received, scan it with your WhatsApp:");
-            qrcode.generate(qr, { small: true });
-            if (webInterface && webInterface.broadcast) {
-                webInterface.broadcast({ type: "qrCode", data: qr });
+        if (qr) {
+            if (botState.webInterface && botState.webInterface.broadcast) {
+                console.log("QR code received by bot, sending to web interface.");
+                botState.webInterface.broadcast({ type: "qrCode", data: qr });
             }
         }
         if (connection === "close") {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom) && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut;
-            console.log("Connection closed due to ", lastDisconnect.error, ", reconnecting ", shouldReconnect);
-            if (webInterface && webInterface.broadcast) {
-                webInterface.broadcast({ type: "status", message: `Connection closed. Reconnecting: ${shouldReconnect}` });
+            const statusCode = lastDisconnect.error?.output?.statusCode;
+            console.log("Connection closed due to ", lastDisconnect.error, `status code: ${statusCode}`);
+
+            if (botState.webInterface && botState.webInterface.broadcast) {
+                botState.webInterface.broadcast({ type: "status", message: `Connection closed. Reason: ${lastDisconnect.error?.message || 'Unknown'}` });
             }
-            if (shouldReconnect) {
-                connectToWhatsApp();
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                console.log("Logged out. Session data will be cleared. Please re-pair via web interface.");
+                try {
+                    // Attempt to clear session data for a fresh start
+                    fs.rmSync(path.join(SESSION_DIR, "baileys_auth_info"), { recursive: true, force: true });
+                    console.log("Cleared session data due to logout.");
+                } catch (e) {
+                    console.error("Error clearing session data:", e);
+                }
+                if (botState.webInterface && botState.webInterface.broadcast) {
+                    botState.webInterface.broadcast({ type: "pairingRequired", message: "Logged out. Please initiate pairing." });
+                }
+            } else if (statusCode === DisconnectReason.connectionClosed ||
+                       statusCode === DisconnectReason.connectionLost ||
+                       statusCode === DisconnectReason.timedOut ||
+                       statusCode === DisconnectReason.restartRequired) {
+                console.log("Connection issue, Baileys will attempt to reconnect.");
             } else {
-                console.log("Not reconnecting, logged out or other reason.");
-                if (rl && !rl.closed) rl.close();
+                console.log("Connection closed with unhandled reason or no need to auto-reconnect from here.");
+                 if (botState.webInterface && botState.webInterface.broadcast && !botState.sock.authState.creds.registered) {
+                    botState.webInterface.broadcast({ type: "pairingRequired", message: "Connection failed. Please initiate pairing." });
+                }
             }
         } else if (connection === "open") {
             console.log("WhatsApp connection opened!");
             console.log(`Bot Name: ${config.botName}, Owner: ${config.ownerNumber}`);
-            if (webInterface && webInterface.broadcast) {
-                webInterface.broadcast({ type: "status", message: "WhatsApp connection opened!" });
+            if (botState.webInterface && botState.webInterface.broadcast) {
+                botState.webInterface.broadcast({ type: "status", message: "WhatsApp connection opened!" });
             }
-            if (rl && !rl.closed) rl.close(); 
         }
     });
 
@@ -140,8 +116,8 @@ async function connectToWhatsApp() {
         const msg = m.messages[0];
         if (!msg.message || msg.key.fromMe || !isJidUser(msg.key.remoteJid)) return;
 
-        if (webInterface && webInterface.broadcast) {
-            webInterface.broadcast({ type: "newWhatsappMessage", data: msg });
+        if (botState.webInterface && botState.webInterface.broadcast) {
+            botState.webInterface.broadcast({ type: "newWhatsappMessage", data: msg });
         }
         const sender = msg.key.remoteJid;
         let text = "";
@@ -173,7 +149,7 @@ async function connectToWhatsApp() {
                     setTimeout(() => timestamps.delete(sender), cooldownAmount);
                 }
                 try {
-                    await command.execute(sock, msg, args, webInterface);
+                    await command.execute(sock, msg, args, botState.webInterface);
                 } catch (error) {
                     console.error(`Error executing command ${command.name}:`, error);
                     await sock.sendMessage(sender, { text: "حدث خطأ أثناء تنفيذ هذا الأمر." });
@@ -181,24 +157,73 @@ async function connectToWhatsApp() {
             }
         }
     });
+
     return sock;
 }
 
-connectToWhatsApp().catch(err => {
-    console.error("Failed to connect to WhatsApp:", err);
-    if (rl && !rl.closed) rl.close();
+async function requestPairingCodeFromWeb(phoneNumber) {
+    if (!botState.sock) {
+        console.error("Socket not initialized for pairing code request.");
+        return { success: false, message: "Bot not initialized." };
+    }
+    if (!phoneNumber || !phoneNumber.startsWith("+")) {
+        return { success: false, message: "Invalid phone number format. Must include country code e.g. +123..." };
+    }
+    try {
+        console.log(`Requesting pairing code for ${phoneNumber} via web command...`);
+        const code = await botState.sock.requestPairingCode(phoneNumber.replace("+", ""));
+        console.log(`Pairing code for ${phoneNumber} is: ${code}`);
+        if (botState.webInterface && botState.webInterface.broadcast) {
+            botState.webInterface.broadcast({ type: "pairingCode", data: code, forNumber: phoneNumber });
+        }
+        return { success: true, code: code, forNumber: phoneNumber };
+    } catch (e) {
+        console.error("Failed to request pairing code via web:", e.message);
+        if (botState.webInterface && botState.webInterface.broadcast) {
+            botState.webInterface.broadcast({ type: "error", message: `Failed to get pairing code: ${e.message}` });
+        }
+        return { success: false, message: e.message };
+    }
+}
+
+async function main() {
+    await connectToWhatsApp(); 
+    botState.webInterface = startWebServer(botState, scheduleMessage, getScheduledMessages, cancelScheduledMessage, requestPairingCodeFromWeb);
+
+    if (botState.sock && !botState.sock.authState.creds.registered) {
+        if (botState.webInterface && botState.webInterface.broadcast) {
+            console.log("Broadcasting pairingRequired to web interface as no session found after start.");
+            botState.webInterface.broadcast({ type: "pairingRequired" });
+        }
+    }
+}
+
+main().catch(err => {
+    console.error("Failed to start bot:", err);
 });
 
-// Graceful shutdown
 const gracefulShutdown = () => {
     console.log("Shutting down gracefully...");
-    if (rl && !rl.closed) {
-        rl.close();
+    if (botState.sock) {
+        console.log("Closing WhatsApp socket (Baileys should handle actual disconnection).");
+        // botState.sock.end(new Error("Graceful shutdown")); // Optional: force close
     }
-    // Add any other cleanup tasks here
-    process.exit(0);
+    if (botState.webInterface && botState.webInterface.server) {
+        console.log("Closing web server...");
+        botState.webInterface.server.close(() => {
+            console.log("Web server closed.");
+            process.exit(0);
+        });
+        setTimeout(() => {
+            console.error("Graceful shutdown timed out, forcing exit.");
+            process.exit(1);
+        }, 5000);
+    } else {
+        process.exit(0);
+    }
 };
 process.on("SIGINT", gracefulShutdown);
 process.on("SIGTERM", gracefulShutdown);
 
-module.exports = { connectToWhatsApp };
+module.exports = { requestPairingCodeFromWeb, botState };
+

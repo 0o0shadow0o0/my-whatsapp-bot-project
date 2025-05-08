@@ -1,5 +1,22 @@
+// src/web/public/client.js
 const connectionStatusDiv = document.getElementById("connectionStatus");
 const messagesUl = document.getElementById("messages");
+
+// Pairing UI elements
+const pairingSection = document.getElementById("pairingSection");
+const pairingMethodSelect = document.getElementById("pairingMethod");
+const phoneNumberInputContainer = document.getElementById("phoneNumberInputContainer");
+const phoneNumberInput = document.getElementById("phoneNumber");
+const initiatePairingBtn = document.getElementById("initiatePairingBtn");
+
+const qrCodeContainer = document.getElementById("qrCodeContainer");
+const qrCodeImageContainer = document.getElementById("qrCodeImageContainer");
+const pairingCodeContainer = document.getElementById("pairingCodeContainer");
+const pairingCodeValue = document.getElementById("pairingCodeValue");
+const pairingForNumber = document.getElementById("pairingForNumber");
+
+// Main controls UI elements
+const mainControls = document.getElementById("mainControls");
 const recipientInput = document.getElementById("recipient");
 const messageTextInput = document.getElementById("messageText");
 const sendMessageBtn = document.getElementById("sendMessageBtn");
@@ -10,14 +27,7 @@ const scheduleDateTimeInput = document.getElementById("scheduleDateTime");
 const scheduleMessageBtn = document.getElementById("scheduleMessageBtn");
 const scheduledMessagesUl = document.getElementById("scheduledMessagesList");
 
-const connectionMethodInfo = document.getElementById("connectionMethodInfo");
-const qrCodeContainer = document.getElementById("qrCodeContainer");
-const qrCodeImageContainer = document.getElementById("qrCodeImageContainer");
-const pairingCodeContainer = document.getElementById("pairingCodeContainer");
-const pairingCodeValue = document.getElementById("pairingCodeValue");
-const pairingForNumber = document.getElementById("pairingForNumber");
-
-let qrCodeInstance = null; 
+let qrCodeInstance = null;
 
 const socketProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
 const socketURL = `${socketProtocol}//${window.location.host}`;
@@ -28,7 +38,7 @@ function addMessageToList(message, type = "status") {
     li.textContent = message;
     li.className = type;
     messagesUl.appendChild(li);
-    messagesUl.scrollTop = messagesUl.scrollHeight; 
+    messagesUl.scrollTop = messagesUl.scrollHeight;
 }
 
 function addWhatsAppMessageToList(msgData) {
@@ -53,7 +63,7 @@ function addWhatsAppMessageToList(msgData) {
 }
 
 function displayScheduledMessages(messages) {
-    scheduledMessagesUl.innerHTML = ""; 
+    scheduledMessagesUl.innerHTML = "";
     if (messages && messages.length > 0) {
         messages.forEach(msg => {
             const li = document.createElement("li");
@@ -77,26 +87,43 @@ function displayScheduledMessages(messages) {
     }
 }
 
+function showPairingUI() {
+    pairingSection.classList.remove("hidden");
+    qrCodeContainer.classList.add("hidden");
+    pairingCodeContainer.classList.add("hidden");
+    mainControls.classList.add("hidden");
+    pairingMethodSelect.value = "qr"; // Default to QR
+    phoneNumberInputContainer.classList.add("hidden");
+}
+
+function showMainControls() {
+    pairingSection.classList.add("hidden");
+    qrCodeContainer.classList.add("hidden");
+    pairingCodeContainer.classList.add("hidden");
+    mainControls.classList.remove("hidden");
+}
+
 socket.onopen = () => {
     connectionStatusDiv.textContent = "الحالة: متصل بالخادم";
     connectionStatusDiv.style.color = "green";
     addMessageToList("تم الاتصال بخادم الويب بنجاح.");
     socket.send(JSON.stringify({ type: "getScheduledMessages" }));
-    connectionMethodInfo.style.display = "block"; // Show initial info
-    qrCodeContainer.style.display = "none";
-    pairingCodeContainer.style.display = "none";
+    // Initially, we don't know if pairing is needed. Backend will tell us.
+    // showPairingUI(); // Don't show pairing UI immediately
 };
 
 socket.onmessage = (event) => {
     try {
         const data = JSON.parse(event.data);
         console.log("Message from server:", data);
-        if (data.type === "status") {
+
+        if (data.type === "pairingRequired") {
+            addMessageToList(data.message || "يرجى ربط حساب واتساب للمتابعة.");
+            showPairingUI();
+        } else if (data.type === "status") {
             addMessageToList(`[حالة] ${data.message}`);
             if (data.message === "WhatsApp connection opened!") {
-                 qrCodeContainer.style.display = "none"; 
-                 pairingCodeContainer.style.display = "none";
-                 connectionMethodInfo.style.display = "none";
+                showMainControls();
             }
         } else if (data.type === "error") {
             addMessageToList(`[خطأ] ${data.message}`, "error");
@@ -118,21 +145,21 @@ socket.onmessage = (event) => {
             } else {
                 qrCodeImageContainer.textContent = "QRCode library not loaded."; 
             }
-            qrCodeContainer.style.display = "block";
-            pairingCodeContainer.style.display = "none";
-            connectionMethodInfo.style.display = "none";
+            pairingSection.classList.add("hidden");
+            qrCodeContainer.classList.remove("hidden");
+            pairingCodeContainer.classList.add("hidden");
             addMessageToList("يرجى مسح رمز QR المعروض أعلاه للاتصال بواتساب.");
         } else if (data.type === "pairingCode") {
             pairingCodeValue.textContent = data.data;
             pairingForNumber.textContent = data.forNumber ? `للرقم: ${data.forNumber}` : "";
-            pairingCodeContainer.style.display = "block";
-            qrCodeContainer.style.display = "none";
-            connectionMethodInfo.style.display = "none";
+            pairingSection.classList.add("hidden");
+            qrCodeContainer.classList.add("hidden");
+            pairingCodeContainer.classList.remove("hidden");
             addMessageToList(`رمز الاقتران الخاص بك هو: ${data.data}. يرجى إدخاله في واتساب.`);
         } else if (data.success === false && data.message) {
-             addMessageToList(`[خطأ جدولة] ${data.message}`, "error");
+             addMessageToList(`[خطأ جدولة/إرسال] ${data.message}`, "error");
         } else {
-            addMessageToList(event.data);
+            // addMessageToList(event.data); // Avoid showing raw data if not structured
         }
     } catch (e) {
         addMessageToList(`بيانات غير مفهومة من الخادم: ${event.data}`);
@@ -141,23 +168,48 @@ socket.onmessage = (event) => {
 };
 
 socket.onclose = () => {
-    connectionStatusDiv.textContent = "الحالة: انقطع الاتصال";
+    connectionStatusDiv.textContent = "الحالة: انقطع الاتصال بالخادم";
     connectionStatusDiv.style.color = "red";
     addMessageToList("انقطع الاتصال بخادم الويب.", "error");
-    qrCodeContainer.style.display = "none";
-    pairingCodeContainer.style.display = "none";
-    connectionMethodInfo.style.display = "block"; // Show info on disconnect
+    showPairingUI(); // Or a specific disconnected message UI
 };
 
 socket.onerror = (error) => {
-    connectionStatusDiv.textContent = "الحالة: خطأ في الاتصال";
+    connectionStatusDiv.textContent = "الحالة: خطأ في الاتصال بالخادم";
     connectionStatusDiv.style.color = "red";
     addMessageToList("حدث خطأ في اتصال WebSocket: " + (error.message || "غير معروف"), "error");
     console.error("WebSocket Error:", error);
-    qrCodeContainer.style.display = "none";
-    pairingCodeContainer.style.display = "none";
-    connectionMethodInfo.style.display = "block"; // Show info on error
+    showPairingUI(); // Or a specific error message UI
 };
+
+// Event listener for pairing method selection
+pairingMethodSelect.addEventListener("change", () => {
+    if (pairingMethodSelect.value === "code") {
+        phoneNumberInputContainer.classList.remove("hidden");
+    } else {
+        phoneNumberInputContainer.classList.add("hidden");
+    }
+});
+
+// Event listener for initiating pairing
+initiatePairingBtn.addEventListener("click", () => {
+    const method = pairingMethodSelect.value;
+    let payload = { type: "initiatePairing", method: method };
+
+    if (method === "code") {
+        const phone = phoneNumberInput.value.trim();
+        if (!phone) {
+            addMessageToList("يرجى إدخال رقم الهاتف للاقتران بالكود.", "error");
+            return;
+        }
+        payload.phoneNumber = phone;
+    }
+    addMessageToList(`جاري بدء عملية الربط باستخدام: ${method === "qr" ? "رمز QR" : "رمز الاقتران"}...`);
+    socket.send(JSON.stringify(payload));
+    // Hide pairing selection UI, wait for QR/Code from backend
+    pairingSection.classList.add("hidden"); 
+});
+
 
 sendMessageBtn.onclick = () => {
     const recipient = recipientInput.value.trim();
